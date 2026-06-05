@@ -24,7 +24,7 @@ The repository includes a high-fidelity snapshot of real-world routes and cyclon
 
 1. Clone the repo and configure your environment:
    ```bash
-   git clone [https://github.com/adijunek/kine-track-go.git](https://github.com/adijunek/kine-track-go.git)
+   git clone https://github.com/adijunek/kine-track-go.git
    cd kine-track-go
    cp .env.example .env
 2. Boot the Spatial Database (Automatically imports sample data):
