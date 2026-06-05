@@ -1,0 +1,13 @@
+# Environment Variables
+.env
+
+# Compiled Binaries
+bin/
+kine-track-go
+*.exe
+
+# Database Volumes (CRITICAL)
+docker/db/data/pg_data/
+
+# OS generated files
+.DS_Store

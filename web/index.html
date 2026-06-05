@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kine-Track Spatial Engine</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        #map { height: 100vh; width: 100vw; z-index: 1; background-color: #0f172a; }
+        .leaflet-popup-content-wrapper { background: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 0.5rem; }
+        .leaflet-popup-tip { background: #1e293b; border-bottom: 1px solid #334155; border-right: 1px solid #334155; }
+    </style>
+</head>
+<body class="bg-slate-900 text-white relative">
+
+    <div id="map" class="absolute inset-0"></div>
+
+    <div id="cyclone-alert" class="hidden absolute bottom-6 left-6 z-[1000] flex items-center bg-red-600 text-white p-3 px-4 rounded-lg shadow-[0_0_15px_rgba(220,38,38,0.5)] border border-red-800 animate-pulse transition-opacity">
+        <span class="text-3xl mr-3">⚠️</span>
+        <div class="flex flex-col">
+            <span class="font-bold text-xs uppercase tracking-wider text-red-200">Critical Cyclone Alert</span>
+            <span class="text-sm font-semibold" id="cyclone-alert-text">0 storm systems detected</span>
+        </div>
+    </div>
+
+    <div class="absolute top-4 right-4 bg-slate-900/90 border border-slate-700 p-6 rounded-xl shadow-2xl w-96 backdrop-blur-md z-[1000]">
+        <div class="flex justify-between items-center mb-4">
+            <h1 class="text-xl font-bold text-blue-400 tracking-tight">KINE-TRACK V1</h1>
+            <span class="bg-green-500/20 text-green-400 text-xs px-2 py-1 rounded-full border border-green-500/50">LIVE</span>
+        </div>
+        
+        <div class="space-y-4">
+            <div>
+                <p class="text-slate-400 text-xs uppercase tracking-wider mb-1">Target Vessel</p>
+                <p class="text-lg font-bold text-slate-100" id="ui-ship">DLN MANDALIKA</p>
+                <p class="text-sm text-slate-400" id="ui-route">Loading Route...</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 border-t border-slate-700 pt-4">
+                <div>
+                    <p class="text-slate-400 text-xs uppercase tracking-wider mb-1">Speed</p>
+                    <p class="text-xl font-mono text-blue-300"><span id="ui-speed">--</span> <span class="text-sm">kts</span></p>
+                </div>
+                <div>
+                    <p class="text-slate-400 text-xs uppercase tracking-wider mb-1">Distance Rem.</p>
+                    <p class="text-xl font-mono text-blue-300"><span id="ui-rem">--</span> <span class="text-sm">NM</span></p>
+                </div>
+            </div>
+
+            <div class="border-t border-slate-700 pt-4">
+                <div class="flex justify-between mb-2">
+                    <p class="text-slate-400 text-xs uppercase tracking-wider">Route Progress</p>
+                    <p class="text-xs font-mono text-blue-400 font-bold" id="ui-pct">--%</p>
+                </div>
+                <div class="w-full bg-slate-800 rounded-full h-2">
+                    <div id="ui-progress-bar" class="bg-blue-500 h-2 rounded-full transition-all duration-1000" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="bg-blue-900/20 border border-blue-800/50 p-4 rounded-lg mt-2">
+                <p class="text-blue-400 text-xs uppercase tracking-wider mb-1">Predictive ETA</p>
+                <p class="text-3xl font-mono text-white tracking-tight" id="ui-eta">--h --m</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Adapted from VesselTracking.vue -> formatWindData
+        function formatWindData(speedMs) {
+            const knots = speedMs * 1.94384;
+            let beaufort = ""; let cssClass = ""; let color = "";
+            
+            if (knots >= 48) { beaufort = "(Force 10+: Storm)"; cssClass = "text-red-400 font-bold"; color = "#ef4444"; } 
+            else if (knots >= 34) { beaufort = "(Force 8-9: Gale)"; cssClass = "text-orange-400 font-bold"; color = "#f97316"; } 
+            else if (knots >= 22) { beaufort = "(Force 6-7: Strong Breeze)"; cssClass = "text-yellow-400 font-bold"; color = "#eab308"; } 
+            else { cssClass = "text-slate-300"; color = "#3b82f6"; }
+            
+            return { knots: knots.toFixed(1), warning: beaufort, cssClass, color };
+        }
+
+        const map = L.map('map', { zoomControl: false }).setView([-2.5, 117.5], 6);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap &copy; CARTO'
+        }).addTo(map);
+
+        fetch('/api/v1/map-data')
+            .then(response => response.json())
+            .then(data => {
+                // --- 1. THE ROUTE GEOMETRY ---
+                if (data.trajectory.completed_geojson) {
+                    const completed = JSON.parse(data.trajectory.completed_geojson);
+                    L.geoJSON(completed, {
+                        style: { color: '#9ca3af', weight: 3, dashArray: '4, 8', opacity: 0.6 } // Light gray dash
+                    }).addTo(map);
+                }
+
+                if (data.trajectory.remaining_geojson) {
+                    const remaining = JSON.parse(data.trajectory.remaining_geojson);
+                    L.geoJSON(remaining, {
+                        style: { color: '#22c55e', weight: 4, dashArray: '6, 8', opacity: 0.9 } // Bright green dash
+                    }).addTo(map);
+                }
+
+                // --- 2. SHIP MARKER ---
+                const shipIcon = L.divIcon({ html: '🚢', className: 'text-2xl', iconSize: [24, 24], iconAnchor: [12, 12] });
+                L.marker([data.vessel.lat, data.vessel.lon], {icon: shipIcon})
+                    .addTo(map)
+                    .bindPopup(`<strong class="text-blue-400">DLN MANDALIKA</strong><br>Heading to ${data.trajectory.reported_destination}`);
+
+                // --- 3. CYCLONE HAZARDS (Vue Adapted) ---
+                let criticalCount = 0;
+                
+                data.hazards.forEach(hazard => {
+                    const windInfo = formatWindData(hazard.wind_speed);
+                    if (windInfo.knots >= 48) criticalCount++; // Track critical storms
+
+                    L.circle([hazard.lat, hazard.lon], {
+                        color: windInfo.color,
+                        fillColor: windInfo.color,
+                        fillOpacity: 0.2,
+                        weight: 1,
+                        radius: hazard.wind_speed * 2000 // Scaled for visual impact
+                    }).addTo(map).bindPopup(`
+                        <div class="min-w-[150px]">
+                            <p class="font-bold text-slate-100 mb-1 border-b border-slate-600 pb-1">🚨 Cyclone Details</p>
+                            <p class="text-xs mb-1">Pos: <strong>${hazard.lat.toFixed(2)}, ${hazard.lon.toFixed(2)}</strong></p>
+                            <p class="text-xs">Wind: <span class="${windInfo.cssClass}">${windInfo.knots} kts ${windInfo.warning}</span></p>
+                        </div>
+                    `);
+                });
+
+                // Trigger Vue Alert Banner
+                if (criticalCount > 0) {
+                    document.getElementById('cyclone-alert').classList.remove('hidden');
+                    document.getElementById('cyclone-alert-text').innerText = `${criticalCount} critical storm system(s) > 48kts`;
+                }
+
+                // --- 4. DASHBOARD DATA ---
+                document.getElementById('ui-route').innerText = `Dest: ${data.trajectory.reported_destination}`;
+                document.getElementById('ui-speed').innerText = data.vessel.speed;
+                document.getElementById('ui-rem').innerText = data.trajectory.remaining_nm;
+                document.getElementById('ui-pct').innerText = `${data.trajectory.true_percent_complete}%`;
+                document.getElementById('ui-progress-bar').style.width = `${data.trajectory.true_percent_complete}%`;
+                
+                const hrs = Math.floor(data.trajectory.estimated_hours);
+                const mins = Math.round((data.trajectory.estimated_hours - hrs) * 60);
+                document.getElementById('ui-eta').innerText = `${hrs}h ${mins}m`;
+
+                // Auto-fit map to show ship and remaining path
+                map.flyTo([data.vessel.lat, data.vessel.lon], 7, { duration: 2 });
+            })
+            .catch(error => console.error('Error fetching spatial data:', error));
+    </script>
+</body>
+</html>
